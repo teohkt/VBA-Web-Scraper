@@ -1,3 +1,5 @@
+'Microsoft Internet Controls and Microsoft HTML Object Library needs to be activated under Visual Basics > Tools > References
+
 Sub All_Zones_Download_Click()
     
     Dim ie As New SHDocVw.InternetExplorer 'need to activate tools, microsoft internet controls for shdocvw to work
