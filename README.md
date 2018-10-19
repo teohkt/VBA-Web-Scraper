@@ -1,2 +1,2 @@
 # VBA-Web-Scraper
-Different subscripts and functions used to help with downloading queries and organizing data
+Different subroutines and functions used to automate downloading queries and organizing data
