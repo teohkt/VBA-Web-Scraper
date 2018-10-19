@@ -1,0 +1,541 @@
+Sub All_Zones_Download_Click()
+    
+    Dim ie As New SHDocVw.InternetExplorer 'need to activate tools, microsoft internet controls for shdocvw to work
+    
+    'First check the quantity of zones that downloads are needed for
+    r_amount = Range("h" & Rows.Count).End(xlUp).Row
+    z_entries = r_amount - 7
+    Debug.Print "Number of Entries: " & z_entries
+    
+    Application.DisplayStatusBar = True
+    Debug.Print "Opening IE to PDDA"
+    With ie
+        .Visible = True
+        .Navigate "http://pdda.ham.am.honda.com/pdda/"
+    End With
+    
+    Do While ie.Busy Or ie.READYSTATE <> READYSTATE_COMPLETE
+        DoEvents
+    Loop
+    
+    Debug.Print "Entering User Info"
+    ie.Document.forms("honda").elements("userName").Value = ThisWorkbook.Sheets("sheet1").Range("B1")
+    ie.Document.forms("honda").elements("password").Value = ThisWorkbook.Sheets("sheet1").Range("B2")
+    Application.SendKeys "~" 'sends and enter keypress
+ 
+    'Verify that we have a successful login. ie.busy or ie.READYSTATE does not work in this case, so looking for a tab is more reliable
+    WindowCheck "PDDA"
+    
+    'This is needed to let it completely load. Without it, the javascript links may not have fully loaded
+    Application.Wait (Now + TimeValue("0:00:01"))
+    
+    'Create a file name based on current time and date. This is done up here so that the name will be constant throughout the script
+    file_name1 = new_file_name()
+    
+    'Creating a workbook with that filename
+    Debug.Print "Create new workbook"
+    New_Compiled_Book file_name1
+    
+    'Navigates to the MTO by team query page
+    Debug.Print "Opening up the MTO Query"
+    Queries_MTO ie
+         
+    'Cycles through each zone in the column list
+    iter = 0
+    Do While iter < z_entries
+        
+        'Enters the Information
+        Debug.Print "Entering Query Info"
+        Query_info ie, iter
+ 
+        'Time delay to allow IE to finish loading. Application.Wait will lock up this process and cause a timeout
+        Pause (5)
+        
+        'This checks to see if PDDA returns no query found. A Msg Box will pop up and allow the user to adjust the information before continuing
+        no_data ie
+        
+        'This will copy the information from the query and save it to the new workbook created above
+        copyover file_name1
+        
+        'This clears the temporary files incase a douplicate query was made, which will cause different message boxes to appear
+        Shell "RunDll32.exe InetCpl.cpl,ClearMyTracksByProcess 8 "
+        
+        iter = iter + 1
+       
+    Loop
+    
+    Debug.Print "All Downloads Completed"
+   
+    'Puts all the pages into one so that a pivot table can be made
+    Debug.Print "Compiling pages into Sheet1"
+    consolidate_pages (file_name1)
+    
+    'Creates pivot table based on predefined needs of the client
+    Debug.Print "Creating pivot table in Pivot_Table"
+    Pivot_Table (file_name1)
+    
+    'Creates a values only pivot table so that adjustments/ modifications can be made to it
+    Debug.Print "Copying over just numbers into Final"
+    final_pivot (file_name1)
+    
+    'Fills in missing blanks caused by the pivot table which are simply repeats of the value above it, and created a new column for application count
+    Debug.Print "Filling in TEAM, PROC NO, PROC NAME, Applicaiton Count"
+    fill_blanks
+    
+    Debug.Print "Saving workbook"
+    ActiveWorkbook.Save
+    
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub WindowCheck(name_page)
+'This subscript will find a window with the same name_page string
+    
+    Count = 0
+    Set objShell = CreateObject("Shell.Application")
+    
+    'This finds the numer of windows open
+    IE_count = objShell.Windows.Count
+    
+    For x = 0 To (IE_count - 1)
+        'This is needed because sometimes more windows are counted than are actully present
+        On Error Resume Next
+        
+        'my_url = objShell.Windows(x).Document.Location
+        my_title = objShell.Windows(x).Document.Title
+        'Debug.Print my_title
+        If my_title Like name_page Then
+            'This sets ie to the right object
+            Set ie = objShell.Windows(x)
+            Count = 1
+            Exit For
+        Else
+        End If
+    Next
+    
+    'If for the first time the subscript runs, the appropriate window is not found, it'll repeat it again after waiting 1 second.
+    Do While Count = 0
+        Application.Wait (Now + TimeValue("0:00:01"))
+            Set objShell = CreateObject("Shell.Application")
+            IE_count = objShell.Windows.Count
+            For x = 0 To (IE_count - 1)
+                On Error Resume Next
+                'my_url = objShell.Windows(x).Document.Location
+                my_title = objShell.Windows(x).Document.Title
+                'Debug.Print my_title
+                If my_title Like name_page Then
+                    Set ie = objShell.Windows(x)
+                    Count = 1
+                    Exit For
+                Else
+                End If
+            Next
+    Loop
+
+    Application.Wait (Now + TimeValue("0:00:01"))
+    
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Function new_file_name() As String
+'Creates a new file name with time and date
+    
+    new_file_name = "MTO Full " & Format(Now(), "DD-MM-YYY hh mm AMPM") & ".xlsx"
+
+End Function
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub New_Compiled_Book(file_name1)
+'Creates a workbook and saves it in a specific location
+
+    Dim wb As Workbook
+    Set wb = Workbooks.Add
+
+    wb.SaveAs FileName:="G:\AF\AFProcess\Query_Downloads\Unit Time General by MTO\" & file_name1
+
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub Queries_MTO(ie)
+'Navigates to the correct query and prechecks all the checkboxes that are required for a complete download
+
+    'Requests for the "Queries" webpage
+    Call ie.Document.parentWindow.execScript("setTask('queryMain')", "JavaScript")
+    
+    'Verifies that the web browser is on the right page through it's title
+    WindowCheck "Queries"
+    
+    'Requests for the "Unit Time by Team, MTO" webpage
+    Call ie.Document.parentWindow.execScript("honda.statusText.value='';honda.rptName.value='Unit Time By Team, MTO                            ';document.honda.submit();")
+    
+    'Experimented by clicking the correct button, but calling the exact script would be more accurate
+    'Set elems = ie.Document.getElementsByTagName("Unit Time General by MTO")
+    'elems.Click
+    
+    'Verifies that the web browser is on the right page through it's title
+    WindowCheck "Query Prompts"
+    
+    'check off the boxes inspection, back-up, equipment, outsourcing, logistics, repair, temporary
+    For i = 1 To 7
+        Set elems = ie.Document.getElementsByName("teamsAdmin")(i)
+        elems.Click
+    Next
+
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub Query_info(ie, iter)
+    
+    Dim Zone_Number As String
+    Dim row_number As String
+    Dim FileName As String
+    Dim t As Date, tstop As Date
+    
+    'This cycles through the rows based on paramaters
+    row_number = 8 + iter
+    Zone_Number = "H" & row_number
+    'Debug.Print Zone_Number
+    
+    Debug.Print ThisWorkbook.Sheets("sheet1").Range(Zone_Number)
+    
+    'Fills out the information
+    ie.Document.forms("honda").elements("Line No").Value = ThisWorkbook.Sheets("sheet1").Range("B4")
+    ie.Document.forms("honda").elements("Model Year").Value = ThisWorkbook.Sheets("sheet1").Range("B5")
+    ie.Document.forms("honda").elements("VMC").Value = ThisWorkbook.Sheets("sheet1").Range("B6")
+    ie.Document.forms("honda").elements("Production Rate").Value = ThisWorkbook.Sheets("sheet1").Range("B7")
+    ie.Document.forms("honda").elements("Team No").Value = ThisWorkbook.Sheets("sheet1").Range(Zone_Number)
+
+    'Creates the name of the sheet based on the zone number in the query
+    FileName = ThisWorkbook.Sheets("sheet1").Range("B8")
+     
+    'Can either use the javascript command or the button. Either works
+    'Call ie.Document.parentWindow.execScript("document.honda.statusText.value='';javascript:var result=validateUnitType(); if(result){submitQuery();}", "JavaScript")
+    Set elems = ie.Document.getElementsByTagName("button")(0)
+    elems.Click
+
+    Debug.Print "submitted form"
+          
+    'The following is an either wait for a status message to show up, or time to expire and then continue.
+    t = Now
+    tstop = t + TimeValue("0:00:05")
+    Debug.Print "waiting for status message waiting for response... "
+    
+    Do While ie.StatusText <> "Waiting for response from pdda.ham.am.honda.com..." And Now < tstop
+        'Debug.Print ie.StatusText
+        Application.Wait (Now + TimeValue("0:00:01"))
+        t = Now
+    Loop
+
+    Debug.Print "Waiting for Document.Readystate = Complete"
+    
+    Do While ie.Document.READYSTATE <> "complete"
+        Debug.Print ie.StatusText
+        Application.Wait (Now + TimeValue("0:00:02"))
+    Loop
+     
+    Application.Wait (Now + TimeValue("0:00:01"))
+    
+    Debug.Print "Sent {ENTER} command"
+    
+    Application.SendKeys "{ENTER}"
+    
+    
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Public Function Pause(NumberOfSeconds As Variant)
+'This can be used instead of application.wait to allow for other processes to run!
+    
+    Dim PauseTime As Variant
+    Dim Start As Variant
+    Dim Elapsed As Variant
+    
+    Debug.Print "Starting pause for " & NumberOfSeconds & " seconds"
+    PauseTime = NumberOfSeconds
+    Start = Timer
+    Elapsed = 0
+    Do While Timer < Start + PauseTime
+        Elapsed = Elapsed + 1
+        If Timer = 0 Then
+            ' Crossing midnight
+            PauseTime = PauseTime - Elapsed
+            Start = 0
+            Elapsed = 0
+        End If
+        DoEvents
+    Loop
+
+End Function
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub no_data(ie)
+'Checks the page for this specific message that appears when no data is returned
+
+    If ie.Document.getElementsByName("StatusText") = "No data returned for query." Then
+        MsgBox "No data returned for query, check inputs"
+    End If
+
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub copyover(file_name1)
+
+    Dim ShtName As String
+    Dim oBook As Workbook
+    bookfinder = 0
+    
+    tstop = Now + TimeValue("0:00:3")
+    
+   'Finds the new excel workbook named query.do
+    Do While True
+        For Each oBook In Workbooks
+            'Debug.Print ">" & oBook.name & "<"
+            If oBook.Name = "query.do" Then
+                bookfinder = 1
+                Debug.Print "Found " & oBook.Name
+            End If
+        Next
+        Application.Wait (Now + TimeValue("0:00:03"))
+        
+        'This allows the loop to break if time has expired
+        If Now > tstop Or bookfinder = 1 Then Exit Do
+    Loop
+    
+    If Now > tstop Then
+        Debug.Print "failed to find excel file"
+        Exit Sub
+    Else
+        Debug.Print "completed task"
+    End If
+
+    Debug.Print "Copying query.do"
+    
+    Workbooks("query.do").ActiveSheet.UsedRange.Copy
+    
+    Debug.Print "Pasting in MTO Full"
+    Windows(file_name1).Activate
+    Sheets.Add After:=ActiveSheet
+    ActiveSheet.Paste
+    ActiveCell.Offset(1, 0).Range("A1").Select
+    ActiveSheet.Name = ActiveSheet.Range("a2")
+    
+    'This clears the clipboard so we do not get a message asking to do so.
+    Application.CutCopyMode = False
+    
+    Windows("query.do").Close savechanges:=False
+    
+    Debug.Print "copyover sub completed"
+    
+End Sub
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Sub consolidate_pages(file_name1)
+'This combines all the sheets into 1 for the pivot table
+
+    Dim lastRow As String
+    
+    'Windows("MTO Full 15-10-18288 11 33 PM.xls").Activate
+    Windows(file_name1).Activate
+       
+    'copies the header of the first sheet
+    Sheets(ActiveWorkbook.Sheets(2).Name).Select
+    Debug.Print ActiveWorkbook.Sheets(2).Name
+    Range("A1:M1").Select
+    Selection.Copy
+    Sheets("Sheet1").Select
+    Range("A1").Select
+    ActiveSheet.Paste
+    
+    'Copes the body from the following sheets and pastes the info undereach other
+    For i = 2 To ActiveWorkbook.Sheets.Count
+        Debug.Print ActiveWorkbook.Sheets(i).Name
+        name_sheet = ActiveWorkbook.Sheets(i).Name
+        Sheets(name_sheet).Select
+        lastRow2 = ActiveSheet.UsedRange.Row - 1 + ActiveSheet.UsedRange.Rows.Count
+        'Debug.Print lastRow
+        Range(Cells(2, 1).Address(), Cells(lastRow2, 13).Address()).Select
+        Selection.Copy
+        Sheets("Sheet1").Select
+        lastrow1 = ActiveSheet.UsedRange.Row + ActiveSheet.UsedRange.Rows.Count
+        Rows(lastrow1).Select
+        ActiveSheet.Paste
+        
+    Next i
+
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub Pivot_Table(file_name1)
+    
+    'Windows("MTO Full 15-10-18288 11 33 PM.xls").Activate
+    Windows(file_name1).Activate
+    Sheets.Add After:=ActiveSheet
+    ActiveSheet.Name = "Pivot_Table"
+    Sheets("sheet1").Select
+    Range("A1").Select
+   
+    ActiveSheet.UsedRange.Copy
+    
+'The following script was made through the record macro function
+    ActiveWorkbook.PivotCaches.Create(SourceType:=xlDatabase, SourceData:= _
+        "Sheet1!R1C1:R276739C13", Version:=6).CreatePivotTable TableDestination:= _
+        "Pivot_Table!R3C1", TableName:="PivotTable1", DefaultVersion:=6
+    Sheets("Pivot_Table").Select
+    Cells(3, 1).Select
+    With ActiveSheet.PivotTables("PivotTable1")
+        .ColumnGrand = False
+        .HasAutoFormat = False
+        .PreserveFormatting = False
+        .RowGrand = False
+        .InGridDropZones = True
+        .RowAxisLayout xlTabularRow
+    End With
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("TEAM_NO").Subtotals = Array _
+        (False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("ASM_PROC_NO").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("ASM_PROC_NAME").Subtotals _
+        = Array(False, False, False, False, False, False, False, False, False, False, False, False _
+        )
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_NO").Subtotals = Array _
+        (False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_SEQ_NO").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_OP_DESC_TEXT"). _
+        Subtotals = Array(False, False, False, False, False, False, False, False, False, False, _
+        False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("BASE_PART_NO").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("MTC_MODEL").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("MTC_TYPE").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_TOT_TIME").Subtotals _
+        = Array(False, False, False, False, False, False, False, False, False, False, False, False _
+        )
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_FEATURE").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("BODY_LOC_NO").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+    ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT TYPE").Subtotals = _
+        Array(False, False, False, False, False, False, False, False, False, False, False, False)
+
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("TEAM_NO")
+        .Orientation = xlRowField
+        .Position = 1
+    
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("ASM_PROC_NO")
+        .Orientation = xlRowField
+        .Position = 2
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("ASM_PROC_NAME")
+        .Orientation = xlRowField
+        .Position = 3
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_SEQ_NO")
+        .Orientation = xlRowField
+        .Position = 4
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_NO")
+        .Orientation = xlRowField
+        .Position = 5
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("UNIT_OP_DESC_TEXT")
+        .Orientation = xlRowField
+        .Position = 6
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("MTC_MODEL")
+        .Orientation = xlColumnField
+        .Position = 1
+    End With
+    With ActiveSheet.PivotTables("PivotTable1").PivotFields("MTC_TYPE")
+        .Orientation = xlColumnField
+        .Position = 2
+    End With
+    ActiveSheet.PivotTables("PivotTable1").AddDataField ActiveSheet.PivotTables( _
+        "PivotTable1").PivotFields("UNIT_TOT_TIME"), "Sum of UNIT_TOT_TIME", xlSum
+
+
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub final_pivot(file_name1)
+
+    'Windows("MTO Full 15-10-18288 11 33 PM.xls").Activate
+    Windows(file_name1).Activate
+    
+    Sheets("Pivot_Table").Select
+    ActiveSheet.UsedRange.Copy
+    'Cells.Select
+    'Range("A3").Activate
+    'Selection.Copy
+    
+    Sheets.Add before:=Worksheets("Sheet1")
+    ActiveSheet.Name = "Final Pivot Table"
+    
+    Rows(3).Select
+    
+    Selection.PasteSpecial Paste:=xlPasteValues, Operation:=xlNone, SkipBlanks _
+        :=False, Transpose:=False
+    Rows("5:5").Select
+    Application.CutCopyMode = False
+    Selection.AutoFilter
+    
+    
+    Columns("G:G").Select
+    Selection.Insert Shift:=xlToRight, CopyOrigin:=xlFormatFromRightOrAbove
+    
+    Columns("F:F").ColumnWidth = 45
+    Columns("F:F").Select
+    With Selection
+        .HorizontalAlignment = xlGeneral
+        .VerticalAlignment = xlBottom
+        .WrapText = True
+        .Orientation = 0
+        .AddIndent = False
+        .IndentLevel = 0
+        .ShrinkToFit = False
+        .ReadingOrder = xlContext
+        .MergeCells = False
+    End With
+    Columns("C:C").ColumnWidth = 24.14
+    
+    lastrow1 = ActiveSheet.UsedRange.Row + ActiveSheet.UsedRange.Rows.Count - 1
+    Range("G" & "6:" & "G" & lastrow1).Formula = "=COUNTA(RC[1]:RC[76])"
+    Range("G5").Value = "Count"
+    
+    Columns("h:CE").Select
+    Selection.NumberFormat = "0.00"
+    
+End Sub
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+Sub fill_blanks()
+    i = 1
+    For i = 1 To 3
+        
+        col = Split((Columns(i).Address(, 0)), ":")(0)
+        'Debug.Print col
+        ActiveSheet.UsedRange.AutoFilter Field:=i, Criteria1:="="
+        
+        Range(col & "7").Select
+    
+        ActiveCell.FormulaR1C1 = "=R[-1]C"
+        
+        lastrow1 = ActiveSheet.UsedRange.Row + ActiveSheet.UsedRange.Rows.Count - 1
+        
+        Range(col & "8:" & col & lastrow1).Formula = "=R[-1]C"
+      
+        ActiveSheet.UsedRange.AutoFilter Field:=i
+        Columns(col & ":" & col).Select
+        Selection.Copy
+        Selection.PasteSpecial Paste:=xlPasteValues, Operation:=xlNone, SkipBlanks _
+            :=False, Transpose:=False
+        Application.CutCopyMode = False
+        
+    Next
+End Sub
+
+
+
